@@ -13,7 +13,8 @@ import {
   Star,
   Timer,
   DollarSign,
-  ArrowUpCircle
+  ArrowUpCircle,
+  BookUser
 } from 'lucide-react'
 import Minigame from './components/Minigame'
 
@@ -47,7 +48,22 @@ interface MoneyUpgrade {
   level: number
 }
 
+interface Skill {
+  id: string
+  name: string
+  description: string
+  maxLevel: number
+  getEffect: (level: number) => string
+  getCost: (level: number) => number
+}
+
 interface GameState {
+  // Player Level
+  level: number
+  xp: number
+  xpToNextLevel: number
+  skillPoints: number
+
   // Currency
   money: number
 
@@ -72,8 +88,10 @@ interface GameState {
     autoMultiplier: number
     efficiencyBonus: number
     sellPriceMultiplier: number
+    xpGainMultiplier: number
   }
   moneyUpgrades: MoneyUpgrade[]
+  skills: Record<string, number>
 }
 
 const RESOURCES: Resource[] = [
@@ -88,10 +106,10 @@ const INITIAL_EQUIPMENT: Equipment[] = [
     id: 'basic_pickaxe',
     name: 'Iron Pickaxe',
     type: 'pickaxe',
-    power: 2,
+    power: 1,
     cost: 50,
     owned: 0,
-    description: 'Doubles your mining power'
+    description: '+1 mining power'
   },
   {
     id: 'steel_pickaxe',
@@ -100,7 +118,7 @@ const INITIAL_EQUIPMENT: Equipment[] = [
     power: 5,
     cost: 200,
     owned: 0,
-    description: '5x mining power'
+    description: '+5 mining power'
   },
   {
     id: 'auto_miner',
@@ -109,7 +127,7 @@ const INITIAL_EQUIPMENT: Equipment[] = [
     power: 1,
     cost: 300,
     owned: 0,
-    description: 'Mines 1 resource per second'
+    description: '+1 auto mining/sec'
   },
   {
     id: 'drill',
@@ -118,7 +136,7 @@ const INITIAL_EQUIPMENT: Equipment[] = [
     power: 10,
     cost: 1000,
     owned: 0,
-    description: '10x mining power'
+    description: '+10 mining power'
   },
   {
     id: 'mega_drill',
@@ -127,7 +145,7 @@ const INITIAL_EQUIPMENT: Equipment[] = [
     power: 50,
     cost: 5000,
     owned: 0,
-    description: '50x mining power + depth bonus'
+    description: '+50 mining power'
   }
 ]
 
@@ -158,8 +176,39 @@ const INITIAL_MONEY_UPGRADES: MoneyUpgrade[] = [
   }
 ]
 
+const SKILL_TREE: Skill[] = [
+  {
+    id: 'click_power_boost',
+    name: 'Click Power Boost',
+    description: 'Permanently increase click power.',
+    maxLevel: 10,
+    getEffect: (level) => `+${level * 5}% click power`,
+    getCost: (level) => level + 1,
+  },
+  {
+    id: 'auto_mine_speed',
+    name: 'Auto-Mine Speed',
+    description: 'Permanently increase auto-mining speed.',
+    maxLevel: 10,
+    getEffect: (level) => `+${level * 5}% auto-mine speed`,
+    getCost: (level) => level + 1,
+  },
+  {
+    id: 'xp_gain',
+    name: 'XP Gain',
+    description: 'Permanently increase XP gain from all sources.',
+    maxLevel: 5,
+    getEffect: (level) => `+${level * 10}% XP gain`,
+    getCost: (level) => level * 2 + 1,
+  },
+];
+
 function App() {
   const [gameState, setGameState] = useState<GameState>({
+    level: 1,
+    xp: 0,
+    xpToNextLevel: 100,
+    skillPoints: 0,
     money: 0,
     coal: 0,
     iron: 0,
@@ -174,9 +223,11 @@ function App() {
       clickMultiplier: 1,
       autoMultiplier: 1,
       efficiencyBonus: 1,
-      sellPriceMultiplier: 1
+      sellPriceMultiplier: 1,
+      xpGainMultiplier: 1
     },
-    moneyUpgrades: INITIAL_MONEY_UPGRADES
+    moneyUpgrades: INITIAL_MONEY_UPGRADES,
+    skills: {},
   })
 
   const [miningAnimation, setMiningAnimation] = useState(false)
@@ -198,8 +249,36 @@ function App() {
     setMinigameOpen(false)
     if (result === 'lose') {
       setGameState(prev => ({ ...prev, money: 0 }))
+    } else if (result === 'win') {
+      gainXp(50)
     }
   }
+
+  // XP and leveling
+  const gainXp = useCallback((amount: number) => {
+    const xpGained = amount * gameState.upgrades.xpGainMultiplier
+    setGameState(prev => {
+      let newXp = prev.xp + xpGained
+      let newLevel = prev.level
+      let newXpToNextLevel = prev.xpToNextLevel
+      let newSkillPoints = prev.skillPoints
+
+      while (newXp >= newXpToNextLevel) {
+        newXp -= newXpToNextLevel
+        newLevel ++
+        newXpToNextLevel = Math.floor(newXpToNextLevel * 1.5)
+        newSkillPoints ++
+      }
+
+      return {
+        ...prev,
+        xp: newXp,
+        level: newLevel,
+        xpToNextLevel: newXpToNextLevel,
+        skillPoints: newSkillPoints,
+      }
+    })
+  }, [gameState.upgrades.xpGainMultiplier])
 
   // Calculate current mining resource based on depth
   const getCurrentResource = useCallback(() => {
@@ -212,6 +291,8 @@ function App() {
     const resource = getCurrentResource()
     const power = gameState.clickPower * gameState.upgrades.clickMultiplier
     
+    gainXp(power)
+
     setGameState(prev => ({
       ...prev,
       [resource.id]: prev[resource.id as keyof GameState] as number + power,
@@ -231,6 +312,8 @@ function App() {
       const resource = getCurrentResource()
       const power = gameState.autoMineRate * gameState.upgrades.autoMultiplier
       
+      gainXp(power / 2) // Less XP for auto-mining
+
       setGameState(prev => ({
         ...prev,
         [resource.id]: prev[resource.id as keyof GameState] as number + power,
@@ -248,6 +331,8 @@ function App() {
     if (!resource || (gameState[resourceId as keyof GameState] as number) < amount) return
 
     const moneyGained = amount * resource.value * gameState.upgrades.sellPriceMultiplier
+
+    gainXp(moneyGained / 10) // Gain XP from selling
 
     setGameState(prev => ({
       ...prev,
@@ -310,6 +395,39 @@ function App() {
     }))
   }, [gameState])
 
+  // Spend skill point
+  const spendSkillPoint = useCallback((skillId: string) => {
+    const skill = SKILL_TREE.find(s => s.id === skillId)
+    if (!skill || gameState.skillPoints <= 0) return
+
+    const currentLevel = gameState.skills[skillId] || 0
+    if (currentLevel >= skill.maxLevel) return
+
+    const cost = skill.getCost(currentLevel)
+    if (gameState.skillPoints < cost) return
+
+    setGameState(prev => {
+      const newSkills = { ...prev.skills, [skillId]: currentLevel + 1 }
+      const newUpgrades = { ...prev.upgrades }
+
+      // Apply skill effects
+      if (skillId === 'click_power_boost') {
+        newUpgrades.clickMultiplier = 1 + (newSkills[skillId] * 0.05)
+      } else if (skillId === 'auto_mine_speed') {
+        newUpgrades.autoMultiplier = 1 + (newSkills[skillId] * 0.05)
+      } else if (skillId === 'xp_gain') {
+        newUpgrades.xpGainMultiplier = 1 + (newSkills[skillId] * 0.1)
+      }
+
+      return {
+        ...prev,
+        skillPoints: prev.skillPoints - cost,
+        skills: newSkills,
+        upgrades: newUpgrades,
+      }
+    })
+  }, [gameState])
+
   // Calculate total resource value
   const getTotalValue = useCallback(() => {
     return gameState.coal + 
@@ -338,6 +456,10 @@ function App() {
               <h1 className="text-2xl font-bold text-white">Deep Mine Empire</h1>
             </div>
             <div className="flex items-center gap-4">
+              <Badge variant="outline" className="text-white border-purple-400">
+                <BookUser className="h-4 w-4 mr-1" />
+                Level: {gameState.level} ({gameState.skillPoints} SP)
+              </Badge>
               <Badge variant="outline" className="text-white border-yellow-400">
                 <DollarSign className="h-4 w-4 mr-1" />
                 Money: ${gameState.money.toLocaleString()}
@@ -380,7 +502,7 @@ function App() {
                     {currentResource.icon}
                   </Button>
                   <p className="text-slate-300 mt-4">
-                    Click to mine! Power: {gameState.clickPower}x
+                    Click to mine! Power: {gameState.clickPower}
                   </p>
                   {gameState.autoMineRate > 0 && (
                     <p className="text-green-400 text-sm flex items-center justify-center gap-1">
@@ -392,16 +514,17 @@ function App() {
                 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
+                    <p className="text-slate-400 text-sm">XP Progress</p>
+                    <Progress value={(gameState.xp / gameState.xpToNextLevel) * 100} className="h-2" />
+                    <p className="text-xs text-slate-500">
+                      {Math.floor(gameState.xp)} / {gameState.xpToNextLevel} XP
+                    </p>
+                  </div>
+                  <div>
                     <p className="text-slate-400 text-sm">Depth Progress</p>
                     <Progress value={(gameState.depth % 10) * 10} className="h-2" />
                     <p className="text-xs text-slate-500">
                       Next resource unlock at {Math.ceil(gameState.depth / 10) * 10}m
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-slate-400 text-sm">Total Mined</p>
-                    <p className="text-2xl font-bold text-white">
-                      {gameState.totalMined.toLocaleString()}
                     </p>
                   </div>
                 </div>
@@ -461,9 +584,10 @@ function App() {
           {/* Shop & Equipment */}
           <div className="space-y-6">
             <Tabs defaultValue="equipment" className="w-full">
-              <TabsList className="grid w-full grid-cols-2">
+              <TabsList className="grid w-full grid-cols-3">
                 <TabsTrigger value="equipment">Equipment</TabsTrigger>
                 <TabsTrigger value="upgrades">Upgrades</TabsTrigger>
+                <TabsTrigger value="skills">Skills</TabsTrigger>
               </TabsList>
               <TabsContent value="equipment">
                 <Card className="bg-slate-800/50 border-slate-700 mt-2">
@@ -495,7 +619,7 @@ function App() {
                             </div>
                             <div className="text-right">
                               <p className="text-sm text-slate-300">
-                                {equipment.type === 'automation' ? `${equipment.power}/sec` : `${equipment.power}x`}
+                                {equipment.type === 'automation' ? `+${equipment.power}/sec` : `+${equipment.power}`}
                               </p>
                             </div>
                           </div>
@@ -568,6 +692,57 @@ function App() {
                   </CardContent>
                 </Card>
               </TabsContent>
+              <TabsContent value="skills">
+                <Card className="bg-slate-800/50 border-slate-700 mt-2">
+                  <CardHeader>
+                    <CardTitle className="text-white flex items-center gap-2">
+                      <BookUser className="h-5 w-5 text-yellow-400" />
+                      Skill Tree
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {SKILL_TREE.map(skill => {
+                      const level = gameState.skills[skill.id] || 0
+                      const cost = skill.getCost(level)
+                      const canAfford = gameState.skillPoints >= cost && level < skill.maxLevel
+
+                      return (
+                        <div 
+                          key={skill.id}
+                          className="p-3 rounded-lg bg-slate-700/30 border border-slate-600"
+                        >
+                          <div className="flex justify-between items-start mb-2">
+                            <div>
+                              <p className="text-white font-medium">{skill.name}</p>
+                              <p className="text-xs text-slate-400">{skill.description}</p>
+                              <p className="text-xs text-green-400">{skill.getEffect(level)}</p>
+                              {level > 0 && (
+                                <Badge variant="secondary" className="mt-1">
+                                  Level: {level} / {skill.maxLevel}
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                          
+                          <div className="flex justify-between items-center">
+                            <p className="text-sm text-yellow-400">
+                              Cost: {cost} SP
+                            </p>
+                            <Button
+                              size="sm"
+                              onClick={() => spendSkillPoint(skill.id)}
+                              disabled={!canAfford}
+                              className="bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50"
+                            >
+                              Upgrade
+                            </Button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </CardContent>
+                </Card>
+              </TabsContent>
             </Tabs>
 
             {/* Stats */}
@@ -581,7 +756,7 @@ function App() {
               <CardContent className="space-y-3">
                 <div className="flex justify-between">
                   <span className="text-slate-400">Click Power:</span>
-                  <span className="text-white font-medium">{gameState.clickPower}x</span>
+                  <span className="text-white font-medium">{gameState.clickPower}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Auto Mining:</span>
