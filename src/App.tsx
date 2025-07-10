@@ -56,6 +56,7 @@ interface Skill {
   getEffect: (level: number) => string
   getCost: (level: number) => number
   dependencies?: string[]
+  position: { x: number; y: number };
 }
 
 interface GameState {
@@ -73,6 +74,9 @@ interface GameState {
   iron: number
   gold: number
   diamond: number
+  ruby: number
+  sapphire: number
+  emerald: number
   
   // Game progress
   depth: number
@@ -91,9 +95,10 @@ interface GameState {
     sellPriceMultiplier: number
     xpGainMultiplier: number
     rareResourceChance: number
+    minigameTimeReduction: number;
   }
   moneyUpgrades: MoneyUpgrade[]
-  skills: Record<string, number>
+  skills: Record<string, number>;
 }
 
 const RESOURCES: Resource[] = [
@@ -101,6 +106,9 @@ const RESOURCES: Resource[] = [
   { id: 'iron', name: 'Iron', color: '#718096', value: 5, unlockDepth: 10, icon: '🔧', description: 'Common resource' },
   { id: 'gold', name: 'Gold', color: '#d69e2e', value: 25, unlockDepth: 25, icon: '✨', description: 'Valuable resource' },
   { id: 'diamond', name: 'Diamond', color: '#3182ce', value: 100, unlockDepth: 50, icon: '💎', description: 'Rare resource' },
+  { id: 'ruby', name: 'Ruby', color: '#e53e3e', value: 250, unlockDepth: 100, icon: '♦️', description: 'A precious gem' },
+  { id: 'sapphire', name: 'Sapphire', color: '#3182ce', value: 500, unlockDepth: 200, icon: '🔷', description: 'A valuable jewel' },
+  { id: 'emerald', name: 'Emerald', color: '#38a169', value: 1000, unlockDepth: 300, icon: '❇️', description: 'A rare gemstone' },
 ]
 
 const INITIAL_EQUIPMENT: Equipment[] = [
@@ -205,6 +213,7 @@ const SKILL_TREE: Skill[] = [
     maxLevel: 10,
     getEffect: (level) => `+${level * 5}% click power`,
     getCost: (level) => level + 1,
+    position: { x: 0, y: 0 },
   },
   {
     id: 'auto_mine_speed',
@@ -213,6 +222,7 @@ const SKILL_TREE: Skill[] = [
     maxLevel: 10,
     getEffect: (level) => `+${level * 5}% auto-mine speed`,
     getCost: (level) => level + 1,
+    position: { x: 0, y: 1 },
   },
 
   // Tier 2
@@ -224,6 +234,7 @@ const SKILL_TREE: Skill[] = [
     getEffect: (level) => `+${level * 10}% XP gain`,
     getCost: (level) => level * 2 + 1,
     dependencies: ['click_power_boost', 'auto_mine_speed'],
+    position: { x: 1, y: 0.5 },
   },
   {
     id: 'rare_resource_chance',
@@ -233,17 +244,29 @@ const SKILL_TREE: Skill[] = [
     getEffect: (level) => `+${level}% rare resource chance`,
     getCost: (level) => level * 2 + 2,
     dependencies: ['auto_mine_speed'],
+    position: { x: 1, y: 1.5 },
   },
 
   // Tier 3
   {
     id: 'minigame_bonus',
-    name: 'Minigame Bonus',
-    description: 'Start minigame with a time bonus.',
+    name: 'Minigame Time Reduction',
+    description: 'Reduce minigame time requirement.',
     maxLevel: 3,
-    getEffect: (level) => `+${level}s minigame time`,
+    getEffect: (level) => `-${level * 0.5}s minigame time`,
     getCost: (level) => level * 3 + 2,
     dependencies: ['xp_gain'],
+    position: { x: 2, y: 0.5 },
+  },
+  {
+    id: 'gem_finder',
+    name: 'Gem Finder',
+    description: 'Unlock the ability to find rare gems.',
+    maxLevel: 1,
+    getEffect: () => 'Unlocks Ruby, Sapphire, and Emerald',
+    getCost: () => 5,
+    dependencies: ['rare_resource_chance'],
+    position: { x: 2, y: 1.5 },
   },
 ];
 
@@ -258,6 +281,9 @@ function App() {
     iron: 0,
     gold: 0,
     diamond: 0,
+    ruby: 0,
+    sapphire: 0,
+    emerald: 0,
     depth: 0,
     totalMined: 0,
     clickPower: 1,
@@ -269,7 +295,8 @@ function App() {
       efficiencyBonus: 1,
       sellPriceMultiplier: 1,
       xpGainMultiplier: 1,
-      rareResourceChance: 0
+      rareResourceChance: 0,
+      minigameTimeReduction: 0,
     },
     moneyUpgrades: INITIAL_MONEY_UPGRADES,
     skills: {},
@@ -290,14 +317,14 @@ function App() {
   }, [gameState.depth, lastDepthForMinigame])
 
   // Handle minigame result
-  const handleMinigameClose = (result: 'win' | 'lose') => {
+  const handleMinigameClose = useCallback((result: 'win' | 'lose') => {
     setMinigameOpen(false)
     if (result === 'lose') {
       setGameState(prev => ({ ...prev, money: 0 }))
     } else if (result === 'win') {
       gainXp(50)
     }
-  }
+  }, [gainXp])
 
   // XP and leveling
   const gainXp = useCallback((amount: number) => {
@@ -334,11 +361,18 @@ function App() {
   // Mine resources manually
   const mineResource = useCallback(() => {
     const resource = getCurrentResource()
-    let power = gameState.clickPower * gameState.upgrades.clickMultiplier
+    const power = gameState.clickPower * gameState.upgrades.clickMultiplier
 
     // Check for rare resource find
     if (Math.random() < gameState.upgrades.rareResourceChance / 100) {
-      power *= 2; // Double power for rare find
+      const rareGems = ['ruby', 'sapphire', 'emerald'];
+      const randomGem = rareGems[Math.floor(Math.random() * rareGems.length)];
+      if (gameState.skills.gem_finder) {
+        setGameState(prev => ({
+          ...prev,
+          [randomGem]: prev[randomGem as keyof GameState] as number + 1,
+        }));
+      }
     }
     
     gainXp(power)
@@ -469,6 +503,10 @@ function App() {
         newUpgrades.xpGainMultiplier = 1 + (newSkills[skillId] * 0.1)
       } else if (skillId === 'rare_resource_chance') {
         newUpgrades.rareResourceChance = newSkills[skillId]
+      } else if (skillId === 'minigame_bonus') {
+        newUpgrades.minigameTimeReduction = newSkills[skillId] * 0.5
+      } else if (skillId === 'gem_finder') {
+        newUpgrades.rareResourceChance = 0.1
       }
 
       return {
@@ -485,8 +523,11 @@ function App() {
     return gameState.coal + 
            gameState.iron * 5 + 
            gameState.gold * 25 + 
-           gameState.diamond * 100
-  }, [gameState.coal, gameState.iron, gameState.gold, gameState.diamond])
+           gameState.diamond * 100 + 
+           gameState.ruby * 250 + 
+           gameState.sapphire * 500 + 
+           gameState.emerald * 1000
+  }, [gameState.coal, gameState.iron, gameState.gold, gameState.diamond, gameState.ruby, gameState.sapphire, gameState.emerald])
 
   const currentResource = getCurrentResource()
   const totalValue = getTotalValue()
@@ -497,6 +538,7 @@ function App() {
         open={minigameOpen} 
         onClose={handleMinigameClose} 
         depth={gameState.depth} 
+        timeReduction={gameState.upgrades.minigameTimeReduction}
       />
 
       {/* Header */}
@@ -760,9 +802,26 @@ function App() {
                       const canAfford = gameState.skillPoints >= cost && level < skill.maxLevel && dependenciesMet
 
                       return (
-                        <div key={skill.id} className="relative">
+                        <div key={skill.id} style={{ gridColumn: skill.position.x + 1, gridRow: skill.position.y * 2 + 1 }} className="relative">
+                          {skill.dependencies?.map(dep => {
+                            const depSkill = SKILL_TREE.find(s => s.id === dep)
+                            if (!depSkill) return null
+                            return (
+                              <div 
+                                key={`${skill.id}-${dep}`}
+                                className="absolute bg-slate-500"
+                                style={{
+                                  top: '50%',
+                                  left: `calc(${(depSkill.position.x - skill.position.x) * 100}% - 1rem)`,
+                                  width: `calc(${(skill.position.x - depSkill.position.x) * 100}% + 2rem)`,
+                                  height: '2px',
+                                  transform: 'translateY(-50%)',
+                                }}
+                              />
+                            )
+                          })}
                           <div 
-                            className={`p-3 rounded-lg bg-slate-700/30 border border-slate-600 ${
+                            className={`p-3 rounded-lg bg-slate-700/30 border border-slate-600 relative z-10 ${
                               !dependenciesMet ? 'opacity-50' : ''
                             }`}
                           >
@@ -793,13 +852,6 @@ function App() {
                               </Button>
                             </div>
                           </div>
-                          {skill.dependencies?.map(dep => {
-                            const depSkill = SKILL_TREE.find(s => s.id === dep)
-                            if (!depSkill) return null
-                            return (
-                              <div key={`${skill.id}-${dep}`} className="absolute top-1/2 left-[-2rem] w-4 h-px bg-slate-500" />
-                            )
-                          })}
                         </div>
                       )
                     })}

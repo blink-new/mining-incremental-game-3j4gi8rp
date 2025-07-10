@@ -5,9 +5,10 @@ interface MinigameProps {
   open: boolean
   onClose: (result: 'win' | 'lose') => void
   depth: number
+  timeReduction: number
 }
 
-const Minigame = ({ open, onClose, depth }: MinigameProps) => {
+const Minigame = ({ open, onClose, depth, timeReduction }: MinigameProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [timeLeft, setTimeLeft] = useState(10)
   const [result, setResult] = useState<null | 'win' | 'lose'>(null)
@@ -21,7 +22,7 @@ const Minigame = ({ open, onClose, depth }: MinigameProps) => {
 
   useEffect(() => {
     if (!open) return
-    setTimeLeft(10)
+    setTimeLeft(10 - timeReduction)
     setResult(null)
 
     const canvas = canvasRef.current
@@ -34,7 +35,7 @@ const Minigame = ({ open, onClose, depth }: MinigameProps) => {
     let gasLines: { x: number, y: number, width: number, height: number, speed: number }[] = []
     let gameLoop: number
 
-    const gameSpeed = 1 + depth / 50 // Gas lines move faster at greater depths
+    const gameSpeed = 1 // No longer scales with depth
 
     function drawPlayer() {
       ctx!.fillStyle = '#3b82f6' // Blue
@@ -121,10 +122,10 @@ const Minigame = ({ open, onClose, depth }: MinigameProps) => {
       clearInterval(timerInterval)
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [open, onClose, depth])
+  }, [open, onClose, depth, timeReduction])
 
   return (
-    <Dialog open={open} onOpenChange={() => setResult('lose')}>
+    <Dialog open={open} onOpenChange={(isOpen) => !isOpen && setResult('lose')} modal={true}>
       <DialogContent className="sm:max-w-[425px]">
         <DialogHeader>
           <DialogTitle>Dodge the Gas Lines!</DialogTitle>
