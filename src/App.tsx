@@ -55,6 +55,7 @@ interface Skill {
   maxLevel: number
   getEffect: (level: number) => string
   getCost: (level: number) => number
+  dependencies?: string[]
 }
 
 interface GameState {
@@ -89,6 +90,7 @@ interface GameState {
     efficiencyBonus: number
     sellPriceMultiplier: number
     xpGainMultiplier: number
+    rareResourceChance: number
   }
   moneyUpgrades: MoneyUpgrade[]
   skills: Record<string, number>
@@ -128,6 +130,24 @@ const INITIAL_EQUIPMENT: Equipment[] = [
     cost: 300,
     owned: 0,
     description: '+1 auto mining/sec'
+  },
+  {
+    id: 'auto_drill',
+    name: 'Auto Drill',
+    type: 'automation',
+    power: 5,
+    cost: 1500,
+    owned: 0,
+    description: '+5 auto mining/sec'
+  },
+  {
+    id: 'mega_miner',
+    name: 'Mega Miner',
+    type: 'automation',
+    power: 25,
+    cost: 7500,
+    owned: 0,
+    description: '+25 auto mining/sec'
   },
   {
     id: 'drill',
@@ -177,6 +197,7 @@ const INITIAL_MONEY_UPGRADES: MoneyUpgrade[] = [
 ]
 
 const SKILL_TREE: Skill[] = [
+  // Tier 1
   {
     id: 'click_power_boost',
     name: 'Click Power Boost',
@@ -193,6 +214,8 @@ const SKILL_TREE: Skill[] = [
     getEffect: (level) => `+${level * 5}% auto-mine speed`,
     getCost: (level) => level + 1,
   },
+
+  // Tier 2
   {
     id: 'xp_gain',
     name: 'XP Gain',
@@ -200,6 +223,27 @@ const SKILL_TREE: Skill[] = [
     maxLevel: 5,
     getEffect: (level) => `+${level * 10}% XP gain`,
     getCost: (level) => level * 2 + 1,
+    dependencies: ['click_power_boost', 'auto_mine_speed'],
+  },
+  {
+    id: 'rare_resource_chance',
+    name: 'Rare Resource Chance',
+    description: 'Chance to find rare resources.',
+    maxLevel: 5,
+    getEffect: (level) => `+${level}% rare resource chance`,
+    getCost: (level) => level * 2 + 2,
+    dependencies: ['auto_mine_speed'],
+  },
+
+  // Tier 3
+  {
+    id: 'minigame_bonus',
+    name: 'Minigame Bonus',
+    description: 'Start minigame with a time bonus.',
+    maxLevel: 3,
+    getEffect: (level) => `+${level}s minigame time`,
+    getCost: (level) => level * 3 + 2,
+    dependencies: ['xp_gain'],
   },
 ];
 
@@ -224,7 +268,8 @@ function App() {
       autoMultiplier: 1,
       efficiencyBonus: 1,
       sellPriceMultiplier: 1,
-      xpGainMultiplier: 1
+      xpGainMultiplier: 1,
+      rareResourceChance: 0
     },
     moneyUpgrades: INITIAL_MONEY_UPGRADES,
     skills: {},
@@ -289,7 +334,12 @@ function App() {
   // Mine resources manually
   const mineResource = useCallback(() => {
     const resource = getCurrentResource()
-    const power = gameState.clickPower * gameState.upgrades.clickMultiplier
+    let power = gameState.clickPower * gameState.upgrades.clickMultiplier
+
+    // Check for rare resource find
+    if (Math.random() < gameState.upgrades.rareResourceChance / 100) {
+      power *= 2; // Double power for rare find
+    }
     
     gainXp(power)
 
@@ -302,7 +352,7 @@ function App() {
     
     setMiningAnimation(true)
     setTimeout(() => setMiningAnimation(false), 200)
-  }, [gameState.clickPower, gameState.upgrades.clickMultiplier, getCurrentResource])
+  }, [gameState.clickPower, gameState.upgrades.clickMultiplier, getCurrentResource, gameState.upgrades.rareResourceChance])
 
   // Auto mining effect
   useEffect(() => {
@@ -417,6 +467,8 @@ function App() {
         newUpgrades.autoMultiplier = 1 + (newSkills[skillId] * 0.05)
       } else if (skillId === 'xp_gain') {
         newUpgrades.xpGainMultiplier = 1 + (newSkills[skillId] * 0.1)
+      } else if (skillId === 'rare_resource_chance') {
+        newUpgrades.rareResourceChance = newSkills[skillId]
       }
 
       return {
@@ -704,39 +756,50 @@ function App() {
                     {SKILL_TREE.map(skill => {
                       const level = gameState.skills[skill.id] || 0
                       const cost = skill.getCost(level)
-                      const canAfford = gameState.skillPoints >= cost && level < skill.maxLevel
+                      const dependenciesMet = !skill.dependencies || skill.dependencies.every(dep => (gameState.skills[dep] || 0) > 0)
+                      const canAfford = gameState.skillPoints >= cost && level < skill.maxLevel && dependenciesMet
 
                       return (
-                        <div 
-                          key={skill.id}
-                          className="p-3 rounded-lg bg-slate-700/30 border border-slate-600"
-                        >
-                          <div className="flex justify-between items-start mb-2">
-                            <div>
-                              <p className="text-white font-medium">{skill.name}</p>
-                              <p className="text-xs text-slate-400">{skill.description}</p>
-                              <p className="text-xs text-green-400">{skill.getEffect(level)}</p>
-                              {level > 0 && (
-                                <Badge variant="secondary" className="mt-1">
-                                  Level: {level} / {skill.maxLevel}
-                                </Badge>
-                              )}
+                        <div key={skill.id} className="relative">
+                          <div 
+                            className={`p-3 rounded-lg bg-slate-700/30 border border-slate-600 ${
+                              !dependenciesMet ? 'opacity-50' : ''
+                            }`}
+                          >
+                            <div className="flex justify-between items-start mb-2">
+                              <div>
+                                <p className="text-white font-medium">{skill.name}</p>
+                                <p className="text-xs text-slate-400">{skill.description}</p>
+                                <p className="text-xs text-green-400">{skill.getEffect(level)}</p>
+                                {level > 0 && (
+                                  <Badge variant="secondary" className="mt-1">
+                                    Level: {level} / {skill.maxLevel}
+                                  </Badge>
+                                )}
+                              </div>
+                            </div>
+                            
+                            <div className="flex justify-between items-center">
+                              <p className="text-sm text-yellow-400">
+                                Cost: {cost} SP
+                              </p>
+                              <Button
+                                size="sm"
+                                onClick={() => spendSkillPoint(skill.id)}
+                                disabled={!canAfford}
+                                className="bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50"
+                              >
+                                Upgrade
+                              </Button>
                             </div>
                           </div>
-                          
-                          <div className="flex justify-between items-center">
-                            <p className="text-sm text-yellow-400">
-                              Cost: {cost} SP
-                            </p>
-                            <Button
-                              size="sm"
-                              onClick={() => spendSkillPoint(skill.id)}
-                              disabled={!canAfford}
-                              className="bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50"
-                            >
-                              Upgrade
-                            </Button>
-                          </div>
+                          {skill.dependencies?.map(dep => {
+                            const depSkill = SKILL_TREE.find(s => s.id === dep)
+                            if (!depSkill) return null
+                            return (
+                              <div key={`${skill.id}-${dep}`} className="absolute top-1/2 left-[-2rem] w-4 h-px bg-slate-500" />
+                            )
+                          })}
                         </div>
                       )
                     })}
