@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './components/ui/card'
 import { Button } from './components/ui/button'
 import { Progress } from './components/ui/progress'
 import { Badge } from './components/ui/badge'
-import { Separator } from './components/ui/separator'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs'
 import { 
   Pickaxe, 
   TrendingUp, 
@@ -11,8 +11,11 @@ import {
   Mountain,
   Settings,
   Star,
-  Timer
+  Timer,
+  DollarSign,
+  ArrowUpCircle
 } from 'lucide-react'
+import Minigame from './components/Minigame'
 
 // Game types
 interface Resource {
@@ -22,6 +25,7 @@ interface Resource {
   value: number
   unlockDepth: number
   icon: string
+  description: string
 }
 
 interface Equipment {
@@ -34,7 +38,19 @@ interface Equipment {
   description: string
 }
 
+interface MoneyUpgrade {
+  id: string
+  name: string
+  description: string
+  cost: number
+  effect: (upgrades: GameState['upgrades']) => GameState['upgrades']
+  level: number
+}
+
 interface GameState {
+  // Currency
+  money: number
+
   // Resources
   coal: number
   iron: number
@@ -55,14 +71,16 @@ interface GameState {
     clickMultiplier: number
     autoMultiplier: number
     efficiencyBonus: number
+    sellPriceMultiplier: number
   }
+  moneyUpgrades: MoneyUpgrade[]
 }
 
 const RESOURCES: Resource[] = [
-  { id: 'coal', name: 'Coal', color: '#2d3748', value: 1, unlockDepth: 0, icon: '⚫' },
-  { id: 'iron', name: 'Iron', color: '#718096', value: 5, unlockDepth: 10, icon: '🔧' },
-  { id: 'gold', name: 'Gold', color: '#d69e2e', value: 25, unlockDepth: 25, icon: '✨' },
-  { id: 'diamond', name: 'Diamond', color: '#3182ce', value: 100, unlockDepth: 50, icon: '💎' },
+  { id: 'coal', name: 'Coal', color: '#2d3748', value: 1, unlockDepth: 0, icon: '⚫', description: 'Basic resource' },
+  { id: 'iron', name: 'Iron', color: '#718096', value: 5, unlockDepth: 10, icon: '🔧', description: 'Common resource' },
+  { id: 'gold', name: 'Gold', color: '#d69e2e', value: 25, unlockDepth: 25, icon: '✨', description: 'Valuable resource' },
+  { id: 'diamond', name: 'Diamond', color: '#3182ce', value: 100, unlockDepth: 50, icon: '💎', description: 'Rare resource' },
 ]
 
 const INITIAL_EQUIPMENT: Equipment[] = [
@@ -113,8 +131,36 @@ const INITIAL_EQUIPMENT: Equipment[] = [
   }
 ]
 
+const INITIAL_MONEY_UPGRADES: MoneyUpgrade[] = [
+  {
+    id: 'click_power_1',
+    name: 'Reinforced Clicks',
+    description: 'Increase click power by 10%',
+    cost: 100,
+    effect: (u) => ({ ...u, clickMultiplier: u.clickMultiplier * 1.1 }),
+    level: 0
+  },
+  {
+    id: 'auto_speed_1',
+    name: 'Faster Automation',
+    description: 'Increase auto mining speed by 10%',
+    cost: 250,
+    effect: (u) => ({ ...u, autoMultiplier: u.autoMultiplier * 1.1 }),
+    level: 0
+  },
+  {
+    id: 'sell_bonus_1',
+    name: 'Better Sales',
+    description: 'Increase resource sell price by 5%',
+    cost: 500,
+    effect: (u) => ({ ...u, sellPriceMultiplier: u.sellPriceMultiplier * 1.05 }),
+    level: 0
+  }
+]
+
 function App() {
   const [gameState, setGameState] = useState<GameState>({
+    money: 0,
     coal: 0,
     iron: 0,
     gold: 0,
@@ -127,11 +173,33 @@ function App() {
     upgrades: {
       clickMultiplier: 1,
       autoMultiplier: 1,
-      efficiencyBonus: 1
-    }
+      efficiencyBonus: 1,
+      sellPriceMultiplier: 1
+    },
+    moneyUpgrades: INITIAL_MONEY_UPGRADES
   })
 
   const [miningAnimation, setMiningAnimation] = useState(false)
+  const [minigameOpen, setMinigameOpen] = useState(false)
+  const [lastDepthForMinigame, setLastDepthForMinigame] = useState(0)
+
+  // Check for minigame trigger
+  useEffect(() => {
+    if (Math.floor(gameState.depth) > lastDepthForMinigame) {
+      setLastDepthForMinigame(Math.floor(gameState.depth))
+      if (Math.floor(gameState.depth) % 10 === 0 && gameState.depth > 0) {
+        setMinigameOpen(true)
+      }
+    }
+  }, [gameState.depth, lastDepthForMinigame])
+
+  // Handle minigame result
+  const handleMinigameClose = (result: 'win' | 'lose') => {
+    setMinigameOpen(false)
+    if (result === 'lose') {
+      setGameState(prev => ({ ...prev, money: 0 }))
+    }
+  }
 
   // Calculate current mining resource based on depth
   const getCurrentResource = useCallback(() => {
@@ -174,37 +242,31 @@ function App() {
     return () => clearInterval(interval)
   }, [gameState.autoMineRate, gameState.upgrades.autoMultiplier, getCurrentResource])
 
+  // Sell resources
+  const sellResource = useCallback((resourceId: string, amount: number) => {
+    const resource = RESOURCES.find(r => r.id === resourceId)
+    if (!resource || (gameState[resourceId as keyof GameState] as number) < amount) return
+
+    const moneyGained = amount * resource.value * gameState.upgrades.sellPriceMultiplier
+
+    setGameState(prev => ({
+      ...prev,
+      [resourceId]: (prev[resourceId as keyof GameState] as number) - amount,
+      money: prev.money + moneyGained
+    }))
+  }, [gameState])
+
   // Buy equipment
   const buyEquipment = useCallback((equipmentId: string) => {
     const equipment = gameState.equipment.find(e => e.id === equipmentId)
     if (!equipment) return
 
-    const totalResources = gameState.coal + gameState.iron * 5 + gameState.gold * 25 + gameState.diamond * 100
     const cost = equipment.cost * Math.pow(1.5, equipment.owned)
 
-    if (totalResources < cost) return
+    if (gameState.money < cost) return
 
-    // Deduct cost (prioritize higher value resources)
-    let remainingCost = cost
-    const newState = { ...gameState }
-    
-    // Deduct from diamond first
-    const diamondCost = Math.min(remainingCost / 100, newState.diamond)
-    newState.diamond -= diamondCost
-    remainingCost -= diamondCost * 100
-    
-    // Then gold
-    const goldCost = Math.min(remainingCost / 25, newState.gold)
-    newState.gold -= goldCost
-    remainingCost -= goldCost * 25
-    
-    // Then iron
-    const ironCost = Math.min(remainingCost / 5, newState.iron)
-    newState.iron -= ironCost
-    remainingCost -= ironCost * 5
-    
-    // Finally coal
-    newState.coal -= remainingCost
+    // Deduct cost
+    const newState = { ...gameState, money: gameState.money - cost }
 
     // Update equipment
     const updatedEquipment = newState.equipment.map(e => 
@@ -230,6 +292,24 @@ function App() {
     })
   }, [gameState])
 
+  // Buy money upgrade
+  const buyMoneyUpgrade = useCallback((upgradeId: string) => {
+    const upgrade = gameState.moneyUpgrades.find(u => u.id === upgradeId)
+    if (!upgrade) return
+
+    const cost = upgrade.cost * Math.pow(2, upgrade.level)
+    if (gameState.money < cost) return
+
+    setGameState(prev => ({
+      ...prev,
+      money: prev.money - cost,
+      upgrades: upgrade.effect(prev.upgrades),
+      moneyUpgrades: prev.moneyUpgrades.map(u => 
+        u.id === upgradeId ? { ...u, level: u.level + 1 } : u
+      )
+    }))
+  }, [gameState])
+
   // Calculate total resource value
   const getTotalValue = useCallback(() => {
     return gameState.coal + 
@@ -243,6 +323,12 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
+      <Minigame 
+        open={minigameOpen} 
+        onClose={handleMinigameClose} 
+        depth={gameState.depth} 
+      />
+
       {/* Header */}
       <div className="border-b border-slate-700 bg-slate-800/50 backdrop-blur-sm">
         <div className="container mx-auto px-4 py-4">
@@ -252,6 +338,10 @@ function App() {
               <h1 className="text-2xl font-bold text-white">Deep Mine Empire</h1>
             </div>
             <div className="flex items-center gap-4">
+              <Badge variant="outline" className="text-white border-yellow-400">
+                <DollarSign className="h-4 w-4 mr-1" />
+                Money: ${gameState.money.toLocaleString()}
+              </Badge>
               <Badge variant="outline" className="text-white border-blue-400">
                 <Star className="h-4 w-4 mr-1" />
                 Depth: {Math.floor(gameState.depth)}m
@@ -350,6 +440,16 @@ function App() {
                         <p className="text-xl font-bold text-white">
                           {amount.toLocaleString()}
                         </p>
+                        {isUnlocked && amount > 0 && (
+                          <Button 
+                            size="sm" 
+                            variant="outline"
+                            className="w-full mt-2 text-yellow-400 border-yellow-400 hover:bg-yellow-400 hover:text-black"
+                            onClick={() => sellResource(resource.id, amount)}
+                          >
+                            Sell All
+                          </Button>
+                        )}
                       </div>
                     )
                   })}
@@ -360,58 +460,115 @@ function App() {
 
           {/* Shop & Equipment */}
           <div className="space-y-6">
-            <Card className="bg-slate-800/50 border-slate-700">
-              <CardHeader>
-                <CardTitle className="text-white flex items-center gap-2">
-                  <Settings className="h-5 w-5 text-green-400" />
-                  Equipment Shop
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {gameState.equipment.map(equipment => {
-                  const cost = equipment.cost * Math.pow(1.5, equipment.owned)
-                  const canAfford = totalValue >= cost
-                  
-                  return (
-                    <div 
-                      key={equipment.id}
-                      className="p-3 rounded-lg bg-slate-700/30 border border-slate-600"
-                    >
-                      <div className="flex justify-between items-start mb-2">
-                        <div>
-                          <p className="text-white font-medium">{equipment.name}</p>
-                          <p className="text-xs text-slate-400">{equipment.description}</p>
-                          {equipment.owned > 0 && (
-                            <Badge variant="secondary" className="mt-1">
-                              Owned: {equipment.owned}
-                            </Badge>
-                          )}
-                        </div>
-                        <div className="text-right">
-                          <p className="text-sm text-slate-300">
-                            {equipment.type === 'automation' ? `${equipment.power}/sec` : `${equipment.power}x`}
-                          </p>
-                        </div>
-                      </div>
+            <Tabs defaultValue="equipment" className="w-full">
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="equipment">Equipment</TabsTrigger>
+                <TabsTrigger value="upgrades">Upgrades</TabsTrigger>
+              </TabsList>
+              <TabsContent value="equipment">
+                <Card className="bg-slate-800/50 border-slate-700 mt-2">
+                  <CardHeader>
+                    <CardTitle className="text-white flex items-center gap-2">
+                      <Settings className="h-5 w-5 text-green-400" />
+                      Equipment Shop
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {gameState.equipment.map(equipment => {
+                      const cost = equipment.cost * Math.pow(1.5, equipment.owned)
+                      const canAfford = gameState.money >= cost
                       
-                      <div className="flex justify-between items-center">
-                        <p className="text-sm text-yellow-400">
-                          Cost: {cost.toLocaleString()}
-                        </p>
-                        <Button
-                          size="sm"
-                          onClick={() => buyEquipment(equipment.id)}
-                          disabled={!canAfford}
-                          className="bg-green-600 hover:bg-green-700 disabled:opacity-50"
+                      return (
+                        <div 
+                          key={equipment.id}
+                          className="p-3 rounded-lg bg-slate-700/30 border border-slate-600"
                         >
-                          Buy
-                        </Button>
-                      </div>
-                    </div>
-                  )
-                })}
-              </CardContent>
-            </Card>
+                          <div className="flex justify-between items-start mb-2">
+                            <div>
+                              <p className="text-white font-medium">{equipment.name}</p>
+                              <p className="text-xs text-slate-400">{equipment.description}</p>
+                              {equipment.owned > 0 && (
+                                <Badge variant="secondary" className="mt-1">
+                                  Owned: {equipment.owned}
+                                </Badge>
+                              )}
+                            </div>
+                            <div className="text-right">
+                              <p className="text-sm text-slate-300">
+                                {equipment.type === 'automation' ? `${equipment.power}/sec` : `${equipment.power}x`}
+                              </p>
+                            </div>
+                          </div>
+                          
+                          <div className="flex justify-between items-center">
+                            <p className="text-sm text-yellow-400">
+                              Cost: ${cost.toLocaleString()}
+                            </p>
+                            <Button
+                              size="sm"
+                              onClick={() => buyEquipment(equipment.id)}
+                              disabled={!canAfford}
+                              className="bg-green-600 hover:bg-green-700 disabled:opacity-50"
+                            >
+                              Buy
+                            </Button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </CardContent>
+                </Card>
+              </TabsContent>
+              <TabsContent value="upgrades">
+                <Card className="bg-slate-800/50 border-slate-700 mt-2">
+                  <CardHeader>
+                    <CardTitle className="text-white flex items-center gap-2">
+                      <ArrowUpCircle className="h-5 w-5 text-purple-400" />
+                      Money Upgrades
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {gameState.moneyUpgrades.map(upgrade => {
+                      const cost = upgrade.cost * Math.pow(2, upgrade.level)
+                      const canAfford = gameState.money >= cost
+
+                      return (
+                        <div 
+                          key={upgrade.id}
+                          className="p-3 rounded-lg bg-slate-700/30 border border-slate-600"
+                        >
+                          <div className="flex justify-between items-start mb-2">
+                            <div>
+                              <p className="text-white font-medium">{upgrade.name}</p>
+                              <p className="text-xs text-slate-400">{upgrade.description}</p>
+                              {upgrade.level > 0 && (
+                                <Badge variant="secondary" className="mt-1">
+                                  Level: {upgrade.level}
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                          
+                          <div className="flex justify-between items-center">
+                            <p className="text-sm text-yellow-400">
+                              Cost: ${cost.toLocaleString()}
+                            </p>
+                            <Button
+                              size="sm"
+                              onClick={() => buyMoneyUpgrade(upgrade.id)}
+                              disabled={!canAfford}
+                              className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50"
+                            >
+                              Upgrade
+                            </Button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            </Tabs>
 
             {/* Stats */}
             <Card className="bg-slate-800/50 border-slate-700">
@@ -438,7 +595,6 @@ function App() {
                   <span className="text-slate-400">Total Mined:</span>
                   <span className="text-white font-medium">{gameState.totalMined.toLocaleString()}</span>
                 </div>
-                <Separator className="bg-slate-600" />
                 <div className="flex justify-between">
                   <span className="text-slate-400">Total Value:</span>
                   <span className="text-green-400 font-bold">{totalValue.toLocaleString()}</span>
